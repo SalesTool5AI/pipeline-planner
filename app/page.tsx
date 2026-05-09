@@ -126,6 +126,7 @@ export default function PipelinePlanner() {
         ...weekData, key: activeWeekKey, brainDump, actions,
         intelligence: { high_leverage_plays: plays, reality_check, gaps },
         generatedAt: new Date().toISOString(),
+        metrics: parsed._metrics || undefined,
       };
       await persist(next);
       setView('plan');

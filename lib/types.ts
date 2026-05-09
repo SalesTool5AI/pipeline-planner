@@ -45,6 +45,14 @@ export interface Intelligence {
   gaps: Gap[];
 }
 
+export interface GenerationMetrics {
+  apiMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+  generatedAt: string;
+}
+
 export interface WeekData {
   key: string;
   brainDump: string;
@@ -52,6 +60,7 @@ export interface WeekData {
   intelligence: Intelligence | null;
   meetings: Meeting[];
   generatedAt: string | null;
+  metrics?: GenerationMetrics;
 }
 
 export const emptyWeek = (key: string): WeekData => ({
