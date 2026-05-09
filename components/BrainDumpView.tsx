@@ -1,7 +1,9 @@
 'use client';
 
+import { useCallback } from 'react';
 import { Loader2, AlertTriangle, Zap, RefreshCw } from 'lucide-react';
 import { getQuarterInfo, formatWeekRange } from '@/lib/fiscal';
+import VoiceInput from '@/components/VoiceInput';
 
 const SERIF = { fontFamily: 'Georgia, "Times New Roman", serif' };
 
@@ -18,6 +20,9 @@ interface BrainDumpViewProps {
 
 export default function BrainDumpView({ value, onChange, onGenerate, generating, error, existingPlan, generatedAt, weekKey }: BrainDumpViewProps) {
   const qInfo = getQuarterInfo(weekKey);
+  const handleTranscript = useCallback((text: string) => {
+    onChange(value + (value.length > 0 && !value.endsWith('\n') ? '\n' : '') + text);
+  }, [onChange, value]);
   return (
     <section className="space-y-5">
       <div className="bg-neutral-900 border border-neutral-800 rounded-sm p-6">
@@ -45,7 +50,10 @@ export default function BrainDumpView({ value, onChange, onGenerate, generating,
           style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}
         />
         <div className="flex items-center justify-between mt-4">
-          <div className="text-xs text-neutral-500">{value.length > 0 ? `${value.split(/\s+/).filter(Boolean).length} words` : 'Empty'}</div>
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-neutral-500">{value.length > 0 ? `${value.split(/\s+/).filter(Boolean).length} words` : 'Empty'}</div>
+            <VoiceInput onTranscript={handleTranscript} />
+          </div>
           <button onClick={onGenerate} disabled={generating || !value.trim()} className="inline-flex items-center gap-2 bg-amber-300 text-neutral-950 px-5 py-2.5 rounded-sm text-sm font-medium hover:bg-amber-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
             {generating ? <><Loader2 size={14} className="animate-spin" />Generating plan…</> : existingPlan ? <><RefreshCw size={14} />Regenerate plan</> : <><Zap size={14} />Generate plan</>}
           </button>
