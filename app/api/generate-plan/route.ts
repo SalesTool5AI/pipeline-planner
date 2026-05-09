@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+export const runtime = 'nodejs';
 
 interface FiscalContext {
   label: string;
@@ -88,6 +88,12 @@ export async function POST(request: NextRequest) {
     if (!brainDump?.trim()) {
       return NextResponse.json({ error: 'brainDump is required' }, { status: 400 });
     }
+
+    const apiKey = process.env.PP_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 });
+    }
+    const client = new Anthropic({ apiKey });
 
     const systemPrompt = buildSystemPrompt(fiscalContext);
     const userMessage = fiscalContext
