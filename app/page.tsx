@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Target, Brain, BarChart3 } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { ChevronLeft, ChevronRight, Target, Brain, ChartBar as BarChart3 } from 'lucide-react';
 import { getNextWeekKey, shiftWeek, formatWeekRange, getQuarterInfo } from '@/lib/fiscal';
 import { storage } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
 import { emptyWeek } from '@/lib/types';
 import type { WeekData, Action, Meeting } from '@/lib/types';
 import CapacityBar from '@/components/CapacityBar';
@@ -18,6 +19,7 @@ const SERIF = { fontFamily: 'Georgia, "Times New Roman", serif' };
 export default function PipelinePlanner() {
   const [activeWeekKey, setActiveWeekKey] = useState(getNextWeekKey());
   const [weekData, setWeekData] = useState<WeekData>(emptyWeek(getNextWeekKey()));
+  const [loadingWeek, setLoadingWeek] = useState(false);
   const [brainDump, setBrainDump] = useState('');
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,38 +27,59 @@ export default function PipelinePlanner() {
   const [allWeeks, setAllWeeks] = useState<string[]>([]);
   const [meetingAccount, setMeetingAccount] = useState('');
   const [showAddAction, setShowAddAction] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [weekPlanId, setWeekPlanId] = useState<string | null>(null);
+
+  const loadWeek = useCallback(async (key: string) => {
+    setLoadingWeek(true);
+    setError(null);
+    try {
+      const data = await storage.getWeek(key);
+      setWeekData(data);
+      setBrainDump(data.brainDump || '');
+    } catch (e) {
+      console.error('Failed to load week', e);
+      setWeekData(emptyWeek(key));
+      setBrainDump('');
+    } finally {
+      setLoadingWeek(false);
+    }
+  }, []);
+
+  const refreshAllWeeks = useCallback(async () => {
+    try {
+      const keys = await storage.listWeekKeys();
+      setAllWeeks(keys);
+    } catch {}
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let data = emptyWeek(activeWeekKey);
-      try {
-        const res = await storage.get(`week:${activeWeekKey}`);
-        if (res && res.value) data = JSON.parse(res.value);
-      } catch {}
-      if (!cancelled) { setWeekData(data); setBrainDump(data.brainDump || ''); }
-    })();
-    return () => { cancelled = true; };
-  }, [activeWeekKey, refreshKey]);
+    loadWeek(activeWeekKey);
+  }, [activeWeekKey, loadWeek]);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await storage.list('week:');
-        if (res && res.keys) {
-          const keys = res.keys.map(k => k.replace('week:', '')).sort().reverse();
-          setAllWeeks(keys);
-        }
-      } catch {}
-    })();
-  }, [weekData.generatedAt, weekData.meetings.length, refreshKey]);
+    refreshAllWeeks();
+  }, [weekData.generatedAt, weekData.meetings.length, refreshAllWeeks]);
 
-  const persist = async (next: WeekData) => {
+  // Resolve the DB plan ID for the current week (needed for granular meeting writes)
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from('week_plans')
+        .select('id')
+        .eq('week_key', activeWeekKey)
+        .maybeSingle();
+      setWeekPlanId(data?.id ?? null);
+    })();
+  }, [activeWeekKey, weekData.generatedAt]);
+
+  const persist = useCallback(async (next: WeekData) => {
     setWeekData(next);
-    try { await storage.set(`week:${next.key}`, JSON.stringify(next)); }
-    catch (e) { console.error('Storage error', e); }
-  };
+    try {
+      await storage.saveWeek(next);
+    } catch (e) {
+      console.error('Storage error', e);
+    }
+  }, []);
 
   const generatePlan = async () => {
     if (!brainDump.trim()) return;
@@ -136,24 +159,64 @@ export default function PipelinePlanner() {
     } finally { setGenerating(false); }
   };
 
-  const toggleAction = (id: string) => persist({
-    ...weekData,
-    actions: weekData.actions.map(a => a.id === id ? { ...a, completed: !a.completed, doneAt: !a.completed ? new Date().toISOString() : null } : a),
-  });
+  const toggleAction = useCallback((id: string) => {
+    const next = {
+      ...weekData,
+      actions: weekData.actions.map(a =>
+        a.id === id ? { ...a, completed: !a.completed, doneAt: !a.completed ? new Date().toISOString() : null } : a
+      ),
+    };
+    persist(next);
+  }, [weekData, persist]);
 
-  const deleteAction = (id: string) => persist({ ...weekData, actions: weekData.actions.filter(a => a.id !== id) });
+  const deleteAction = useCallback((id: string) => {
+    persist({ ...weekData, actions: weekData.actions.filter(a => a.id !== id) });
+  }, [weekData, persist]);
 
-  const addManualAction = (action: Omit<Action, 'id' | 'completed' | 'doneAt'>) => {
-    persist({ ...weekData, actions: [...weekData.actions, { id: `m${Date.now()}`, ...action, completed: false, doneAt: null }] });
+  const addManualAction = useCallback((action: Omit<Action, 'id' | 'completed' | 'doneAt'>) => {
+    persist({
+      ...weekData,
+      actions: [...weekData.actions, { id: `m${Date.now()}`, ...action, completed: false, doneAt: null }],
+    });
     setShowAddAction(false);
-  };
+  }, [weekData, persist]);
 
-  const logMeeting = (type: Meeting['type']) => {
-    persist({ ...weekData, meetings: [{ id: `mt${Date.now()}`, type, account: meetingAccount.trim(), timestamp: new Date().toISOString() }, ...weekData.meetings] });
-    setMeetingAccount('');
-  };
+  const logMeeting = useCallback(async (type: Meeting['type']) => {
+    const meeting: Meeting = {
+      id: `mt${Date.now()}`,
+      type,
+      account: meetingAccount.trim(),
+      timestamp: new Date().toISOString(),
+    };
 
-  const deleteMeeting = (id: string) => persist({ ...weekData, meetings: weekData.meetings.filter(m => m.id !== id) });
+    let planId = weekPlanId;
+    if (!planId) {
+      try {
+        planId = await storage.upsertWeekPlan(activeWeekKey, weekData.brainDump, weekData.generatedAt ?? null, weekData.metrics);
+        setWeekPlanId(planId);
+      } catch (e) {
+        console.error('Failed to create plan row', e);
+        return;
+      }
+    }
+
+    try {
+      const saved = await storage.addMeeting(planId, meeting);
+      setWeekData(prev => ({ ...prev, meetings: [saved, ...prev.meetings] }));
+      setMeetingAccount('');
+    } catch (e) {
+      console.error('Failed to log meeting', e);
+    }
+  }, [weekPlanId, activeWeekKey, weekData, meetingAccount]);
+
+  const deleteMeeting = useCallback(async (id: string) => {
+    setWeekData(prev => ({ ...prev, meetings: prev.meetings.filter(m => m.id !== id) }));
+    try {
+      await storage.deleteMeeting(id);
+    } catch (e) {
+      console.error('Failed to delete meeting', e);
+    }
+  }, []);
 
   const stats = useMemo(() => {
     const byCat: Record<string, number> = { selling: 0, prospecting: 0, internal: 0, admin: 0 };
@@ -248,7 +311,11 @@ export default function PipelinePlanner() {
         {/* Plan */}
         {view === 'plan' && (
           <div className="space-y-6">
-            {!hasPlan ? <EmptyState onStart={() => setView('dump')} weekKey={activeWeekKey} /> : (
+            {loadingWeek ? (
+              <div className="flex items-center justify-center py-16 text-neutral-600 text-sm">Loading…</div>
+            ) : !hasPlan ? (
+              <EmptyState onStart={() => setView('dump')} weekKey={activeWeekKey} />
+            ) : (
               <>
                 <CapacityBar stats={stats} />
                 <IntelligencePanel intelligence={weekData.intelligence} actions={weekData.actions} />
@@ -270,7 +337,7 @@ export default function PipelinePlanner() {
         )}
 
         <footer className="mt-16 pt-6 border-t border-neutral-900 text-[10px] tracking-[0.2em] text-neutral-600 text-center">
-          PRIVATE · LOCAL · ONE PERSON · CISCO FY · MEDDPICC
+          PRIVATE · CLOUD · ONE PERSON · CISCO FY · MEDDPICC
         </footer>
       </div>
     </div>

@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { BarChart3, ChevronRight } from 'lucide-react';
+import { ChartBar as BarChart3, ChevronRight } from 'lucide-react';
 import { getQuarterInfo, formatWeekRange } from '@/lib/fiscal';
-import { storage } from '@/lib/storage';
+import { supabase } from '@/lib/supabase';
 
 const SERIF = { fontFamily: 'Georgia, "Times New Roman", serif' };
 
@@ -25,24 +25,37 @@ export default function HistoryView({ allWeeks, currentKey, onSelect }: HistoryV
   const [stats, setStats] = useState<Record<string, WeekStats>>({});
   useEffect(() => {
     let cancelled = false;
+    if (allWeeks.length === 0) return;
     (async () => {
+      // Load action counts and meeting counts for all weeks in two queries
+      const [actionsRes, meetingsRes] = await Promise.all([
+        supabase
+          .from('week_plans')
+          .select('week_key, week_actions(completed)')
+          .in('week_key', allWeeks),
+        supabase
+          .from('week_plans')
+          .select('week_key, week_meetings(type)')
+          .in('week_key', allWeeks),
+      ]);
+
+      if (cancelled) return;
+
       const out: Record<string, WeekStats> = {};
       for (const k of allWeeks) {
-        try {
-          const res = await storage.get(`week:${k}`);
-          if (res && res.value) {
-            const d = JSON.parse(res.value);
-            out[k] = {
-              total: d.actions?.length || 0,
-              done: d.actions?.filter((a: { completed: boolean }) => a.completed).length || 0,
-              newBiz: d.meetings?.filter((m: { type: string }) => m.type === 'new_biz').length || 0,
-              opp: d.meetings?.filter((m: { type: string }) => m.type === 'existing_opp').length || 0,
-              partner: d.meetings?.filter((m: { type: string }) => m.type === 'partner').length || 0,
-            };
-          }
-        } catch {}
+        const planA = actionsRes.data?.find(p => p.week_key === k);
+        const planM = meetingsRes.data?.find(p => p.week_key === k);
+        const actions = (planA?.week_actions as { completed: boolean }[]) ?? [];
+        const meetings = (planM?.week_meetings as { type: string }[]) ?? [];
+        out[k] = {
+          total: actions.length,
+          done: actions.filter(a => a.completed).length,
+          newBiz: meetings.filter(m => m.type === 'new_biz').length,
+          opp: meetings.filter(m => m.type === 'existing_opp').length,
+          partner: meetings.filter(m => m.type === 'partner').length,
+        };
       }
-      if (!cancelled) setStats(out);
+      setStats(out);
     })();
     return () => { cancelled = true; };
   }, [allWeeks]);
