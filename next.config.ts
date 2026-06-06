@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Use webpack (default in Next.js 15)
 };
 
 export default nextConfig;
