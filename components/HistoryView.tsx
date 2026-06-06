@@ -27,35 +27,38 @@ export default function HistoryView({ allWeeks, currentKey, onSelect }: HistoryV
     let cancelled = false;
     if (allWeeks.length === 0) return;
     (async () => {
-      // Load action counts and meeting counts for all weeks in two queries
-      const [actionsRes, meetingsRes] = await Promise.all([
-        supabase
-          .from('week_plans')
-          .select('week_key, week_actions(completed)')
-          .in('week_key', allWeeks),
-        supabase
-          .from('week_plans')
-          .select('week_key, week_meetings(type)')
-          .in('week_key', allWeeks),
-      ]);
+      try {
+        const [actionsRes, meetingsRes] = await Promise.all([
+          supabase
+            .from('week_plans')
+            .select('week_key, week_actions(completed)')
+            .in('week_key', allWeeks),
+          supabase
+            .from('week_plans')
+            .select('week_key, week_meetings(type)')
+            .in('week_key', allWeeks),
+        ]);
 
-      if (cancelled) return;
+        if (cancelled) return;
 
-      const out: Record<string, WeekStats> = {};
-      for (const k of allWeeks) {
-        const planA = actionsRes.data?.find(p => p.week_key === k);
-        const planM = meetingsRes.data?.find(p => p.week_key === k);
-        const actions = (planA?.week_actions as { completed: boolean }[]) ?? [];
-        const meetings = (planM?.week_meetings as { type: string }[]) ?? [];
-        out[k] = {
-          total: actions.length,
-          done: actions.filter(a => a.completed).length,
-          newBiz: meetings.filter(m => m.type === 'new_biz').length,
-          opp: meetings.filter(m => m.type === 'existing_opp').length,
-          partner: meetings.filter(m => m.type === 'partner').length,
-        };
+        const out: Record<string, WeekStats> = {};
+        for (const k of allWeeks) {
+          const planA = actionsRes.data?.find(p => p.week_key === k);
+          const planM = meetingsRes.data?.find(p => p.week_key === k);
+          const actions = (planA?.week_actions as { completed: boolean }[]) ?? [];
+          const meetings = (planM?.week_meetings as { type: string }[]) ?? [];
+          out[k] = {
+            total: actions.length,
+            done: actions.filter(a => a.completed).length,
+            newBiz: meetings.filter(m => m.type === 'new_biz').length,
+            opp: meetings.filter(m => m.type === 'existing_opp').length,
+            partner: meetings.filter(m => m.type === 'partner').length,
+          };
+        }
+        setStats(out);
+      } catch (err) {
+        console.error('HistoryView stats load failed:', err);
       }
-      setStats(out);
     })();
     return () => { cancelled = true; };
   }, [allWeeks]);
